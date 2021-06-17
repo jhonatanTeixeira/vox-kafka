@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "vox-kafka"
-version = "0.1.0"
+version = "0.2.0"
 description = "Sinple kafka abstraction"
 authors = ["Jhonatan Teixeira <jhonatan.teixeira@gmail.com>"]
 license = "MIT"
