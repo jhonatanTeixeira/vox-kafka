@@ -1,0 +1,7 @@
+[run]
+source = ./vox_kafka
+
+[report]
+omit =
+    **/tests.py
+    tasks.py
