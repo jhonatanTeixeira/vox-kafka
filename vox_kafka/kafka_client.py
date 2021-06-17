@@ -1,14 +1,20 @@
+import importlib
 import json
 from concurrent.futures.thread import ThreadPoolExecutor
 from threading import Thread
 
-from django.conf import settings
 from kafka import KafkaAdminClient, KafkaProducer, KafkaConsumer, KafkaClient
 from kafka.admin import NewTopic
 from kafka.errors import TopicAlreadyExistsError
 from kafka.producer.future import FutureRecordMetadata
 
-KAFKA = settings.KAFKA
+
+KAFKA = {}
+
+if importlib.find_loader('django.conf'):
+    from django.conf import settings
+
+    KAFKA = settings.KAFKA
 
 created_topics = []
 
