@@ -1,10 +1,12 @@
 language: python
+os: linux
+dist: xenial
 python:
   - "3.8"
-  - "3.9"
 before_install:
   - pip install poetry
   - pip install codecov
+  - pip install invoke
 install:
   - poetry install
 script:
@@ -18,4 +20,3 @@ deploy:
   script: invoke deploy
   on:
     branch: master
-  skip_cleanup: true
