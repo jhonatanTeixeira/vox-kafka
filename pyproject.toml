@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "vox-kafka"
-version = "0.2.0"
+version = "0.2.2"
 description = "Sinple kafka abstraction"
 authors = ["Jhonatan Teixeira <jhonatan.teixeira@gmail.com>"]
 license = "MIT"
@@ -9,7 +9,7 @@ license = "MIT"
 python = "^3.8"
 kafka-python = "*"
 django-health-check = {version = "*", optional = true}
-Django = {version = "^3.2.4", optional = true}
+Django = {version = ">=3.0,<3.1", optional = true}
 
 [tool.poetry.dev-dependencies]
 coverage = "*"
