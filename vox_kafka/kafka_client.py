@@ -1,6 +1,7 @@
 import importlib
 import json
 from concurrent.futures.thread import ThreadPoolExecutor
+from logging import getLogger
 from threading import Thread
 
 from kafka import KafkaAdminClient, KafkaProducer, KafkaConsumer, KafkaClient
@@ -8,6 +9,7 @@ from kafka.admin import NewTopic
 from kafka.errors import TopicAlreadyExistsError
 from kafka.producer.future import FutureRecordMetadata
 
+logger = getLogger('kafka-client')
 
 KAFKA = {}
 
@@ -15,6 +17,8 @@ if importlib.find_loader('django.conf'):
     from django.conf import settings
 
     KAFKA = settings.KAFKA
+else:
+    logger.debug('Not a django environment')
 
 created_topics = []
 
@@ -71,6 +75,7 @@ def create_kafka_topic(topic, num_partitions=1, replication_factor=1):
             created_topics.append(topic)
             kafka_manager.admin.create_topics([NewTopic(topic, num_partitions, replication_factor)])
     except TopicAlreadyExistsError:
+        logger.debug(f'topic {topic} already exists')
         pass
 
 
@@ -81,11 +86,16 @@ def send_kafka_message_async(topic, payload, partition=None, create_topic=True, 
 
     future = kafka_manager.producer.send(topic, value=payload, partition=partition)
 
+    def on_error(exception):
+        logger.debug(str(exception), stack_info=True)
+
+        if err_callback is not None:
+            err_callback(exception)
+
     if callback is not None:
         future.add_callback(callback, payload)
 
-    if err_callback is not None:
-        future.add_errback(err_callback, payload)
+    future.add_errback(on_error, payload)
 
     return future
 
@@ -98,6 +108,7 @@ def send_kafka_message(topic, payload, partition=None, create_topic=True, num_pa
 def receive_kafka_messages(topic, group_id='internal_consumer', create_topic=True, num_partitions=1,
                            replication_factor=1, **kafka_configs):
     if create_topic:
+        logger.debug(f'Creating topic {topic}')
         create_kafka_topic(topic, num_partitions, replication_factor)
 
     return kafka_manager.create_consumer(topic, group_id, **kafka_configs)
@@ -105,15 +116,23 @@ def receive_kafka_messages(topic, group_id='internal_consumer', create_topic=Tru
 
 def consume_kafka_messages(topic, callback, group_id='internal_consumer', create_topic=True,
                            num_partitions=1, replication_factor=1, **kafka_configs):
-    [callback(payload) for payload in receive_kafka_messages(topic, group_id, create_topic, num_partitions,
-                                                             replication_factor, **kafka_configs)]
+    def on_consume(payload):
+        logger.debug(f'Consuming message for topic {topic}', extra=payload)
+        callback(payload)
+
+    [on_consume(payload) for payload in receive_kafka_messages(topic, group_id, create_topic, num_partitions,
+                                                               replication_factor, **kafka_configs)]
 
 
 def consume_kafka_messages_async(topic, callback, group_id='internal_consumer', max_threads=10, create_topic=True,
                                  num_partitions=1, replication_factor=1, **kafka_configs):
+    def on_consume(payload):
+        logger.debug(f'Consuming message for topic {topic}', extra=payload)
+        callback(payload)
+
     executor = ThreadPoolExecutor(max_workers=max_threads)
-    executor.map(callback, receive_kafka_messages(topic, group_id, create_topic, num_partitions, replication_factor,
-                                                  **kafka_configs))
+    executor.map(on_consume, receive_kafka_messages(topic, group_id, create_topic, num_partitions, replication_factor,
+                                                    **kafka_configs))
 
 
 class KafkaConsumerThread(Thread):
