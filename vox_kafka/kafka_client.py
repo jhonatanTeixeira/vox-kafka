@@ -3,6 +3,7 @@ import json
 from concurrent.futures.thread import ThreadPoolExecutor
 from logging import getLogger
 from threading import Thread
+from typing import List
 
 from kafka import KafkaAdminClient, KafkaProducer, KafkaConsumer, KafkaClient
 from kafka.admin import NewTopic
@@ -12,11 +13,20 @@ from kafka.producer.future import FutureRecordMetadata
 logger = getLogger('kafka-client')
 
 KAFKA = {}
+KAFKA_REPLICAS = []
 
 if importlib.find_loader('django.conf'):
     from django.conf import settings
 
-    KAFKA = settings.KAFKA
+    try:
+        KAFKA = settings.KAFKA
+    except:
+        KAFKA = {}
+
+    try:
+        KAFKA_REPLICAS = settings.KAFKA_REPLICAS
+    except:
+        KAFKA_REPLICAS = []
 else:
     logger.debug('Not a django environment')
 
@@ -29,12 +39,16 @@ def reset_created_topics_cache():
 
 class KafkaManager:
     def __init__(self, serializer=lambda v: json.dumps(v).encode('utf-8'),
-                 deserializer=lambda m: json.loads(m.decode('utf-8')), **configs):
+                 deserializer=lambda m: json.loads(m.decode('utf-8')), use_single=True, **configs):
         self._admin = None
         self._producer = None
         self.serializer = serializer
         self.deserializer = deserializer
-        self.configs = {**KAFKA, **configs}
+
+        if use_single:
+            self.configs = {**KAFKA, **configs}
+        else:
+            self.configs = configs
 
         if 'consumers' in self.configs:
             del self.configs['consumers']
@@ -66,7 +80,63 @@ class KafkaManager:
         return KafkaConsumer(topic, group_id=group_id, **{**self.configs, **kafka_configs})
 
 
+class FutureChain:
+    def __init__(self, futures: List[FutureRecordMetadata] = []):
+        self.future: FutureRecordMetadata = None
+        [self.append(future) for future in futures]
+
+    def get(self, timeout=60):
+        return self.future.get(timeout=timeout)
+
+    def append(self, future: FutureRecordMetadata):
+        if self.future is None:
+            self.future = future
+            return self
+
+        self.future.chain(future)
+
+        return self
+
+    def add_callback(self, callback, *args, **kwargs):
+        self.future.add_callback(callback, *args, **kwargs)
+
+    def add_errback(self, callback, *args, **kwargs):
+        self.future.add_errback(callback, *args, **kwargs)
+
+
+class ChainProducer:
+    def __init__(self, producers: List[KafkaProducer]):
+        self.producers = producers
+
+    def send(self, topic, value, partition) -> FutureChain:
+        return FutureChain([producer.send(topic, value, partition=partition) for producer in self.producers])
+
+
+class KafkaManagerChain:
+    def __init__(self, replicas=[]):
+        self.managers = []
+        producers = []
+
+        for producer in [*KAFKA_REPLICAS, *replicas]:
+            self.managers.append(manager := KafkaManager(use_single=False, **producer))
+            producers.append(manager.producer)
+
+        self.producer = ChainProducer(producers)
+
+    def create_topic(self, topic, num_partitions=1, replication_factor=1):
+        for manager in self.managers:
+            try:
+                manager.admin.create_topics([NewTopic(topic, num_partitions, replication_factor)])
+            except TopicAlreadyExistsError:
+                logger.debug(f'topic {topic} already exists on replica')
+
+    @property
+    def is_enabled(self):
+        return len(self.managers) > 0
+
+
 kafka_manager = KafkaManager()
+kafka_manager_chain = KafkaManagerChain()
 
 
 def create_kafka_topic(topic, num_partitions=1, replication_factor=1):
@@ -74,6 +144,10 @@ def create_kafka_topic(topic, num_partitions=1, replication_factor=1):
         if topic not in created_topics:
             created_topics.append(topic)
             kafka_manager.admin.create_topics([NewTopic(topic, num_partitions, replication_factor)])
+
+            if kafka_manager_chain.is_enabled:
+                kafka_manager_chain.create_topic(topic, num_partitions, replication_factor)
+
     except TopicAlreadyExistsError:
         logger.debug(f'topic {topic} already exists')
         pass
@@ -85,6 +159,10 @@ def send_kafka_message_async(topic, payload, partition=None, create_topic=True, 
         create_kafka_topic(topic, num_partitions, replication_factor)
 
     future = kafka_manager.producer.send(topic, value=payload, partition=partition)
+
+    if kafka_manager_chain.is_enabled:
+        future = kafka_manager_chain.producer.send(topic, value=payload, partition=partition)\
+            .append(future)
 
     def on_error(exception):
         logger.debug(str(exception), stack_info=True)

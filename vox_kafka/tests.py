@@ -22,6 +22,11 @@ settings.configure(
             },
         }
     },
+    KAFKA_REPLICAS=[
+        {
+            'bootstrap_servers': 'kafka2',
+        }
+    ],
     DATABASES={'default': {
         'ENGINE': 'sqlite'
     }},
